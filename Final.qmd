@@ -1,0 +1,441 @@
+---
+title: "Immigration Narratives vs Enforcement: A Total Survey Error Approach"
+author: "Sagnik Chakravarty"
+format: html
+editor: visual
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup}
+library(tidyverse)
+library(lubridate)
+library(readxl)
+library(knitr)
+library(scales)
+library(broom)
+library(patchwork)
+library(lmtest)
+library(kableExtra)
+
+theme_set(theme_minimal(base_size = 12))
+options(scipen = 999)
+```
+
+# Data and Construction of Monthly Indicators
+
+This analysis combines five data sources:
+
+1.  **GDELT monthly immigration news coverage**
+2.  **Raw Reddit posts on immigration-related topics**
+3.  **LLM-classified monthly Reddit sentiment and stance**
+4.  **ICE administrative arrest data**
+5.  **CBP encounter data**
+
+All indicators are aggregated to the **monthly level** to make the narrative and enforcement measures comparable over time.
+
+```{r}
+gdelt <- read_csv("gdelt_gkg_immigration_monthly.csv") %>%
+  mutate(month = as.Date(month))
+
+reddit <- read_csv("reddit_immigration_multi_sort_20260310_1107.csv") %>%
+  mutate(
+    date = as_datetime(url.timestamp),
+    month = floor_date(date, "month") |> as.Date()
+  )
+
+reddit_llm_monthly <- read_csv("reddit_llm_monthly.csv") %>%
+  mutate(month = as.Date(month))
+
+ice <- read_excel("ICE_ERO_PFD_DataFY2021_FY2025_Q1.xlsx") %>%
+  mutate(
+    date = as.Date(paste0("01 ", `Month-Year`), format = "%d %b %Y"),
+    month = floor_date(date, "month") |> as.Date()
+  )
+
+cbp_aor <- read_csv("nationwide-encounters-fy23-fy26-jan-aor.csv") %>%
+  mutate(
+    month = as.Date(paste(`Fiscal Year`, `Month (abbv)`, "01"), format = "%Y %b %d")
+  )
+```
+
+```{r}
+reddit_monthly <- reddit %>%
+  filter(!is.na(month)) %>%
+  group_by(month) %>%
+  summarise(n_posts = n(), .groups = "drop")
+
+ice_monthly <- ice %>%
+  group_by(month) %>%
+  summarise(arrests = sum(`Administrative Arrests`, na.rm = TRUE), .groups = "drop")
+
+cbp_monthly <- cbp_aor %>%
+  filter(!is.na(month)) %>%
+  group_by(month) %>%
+  summarise(encounters = sum(`Encounter Count`, na.rm = TRUE), .groups = "drop")
+```
+
+```{r}
+analysis_df <- gdelt %>%
+  left_join(ice_monthly, by = "month") %>%
+  left_join(cbp_monthly, by = "month") %>%
+  left_join(reddit_llm_monthly, by = "month")
+```
+
+```{r}
+zscore <- function(x) as.numeric((x - mean(x, na.rm = TRUE)) / sd(x, na.rm = TRUE))
+
+analysis_df <- analysis_df %>%
+  mutate(
+    news_z = zscore(n_articles),
+    cbp_z = zscore(encounters),
+    ice_z = zscore(arrests),
+    reddit_z = zscore(n_posts),
+    sentiment_z = zscore(avg_sentiment),
+    news_tone_z = zscore(mean_tone),
+    divergence_cbp = news_z - cbp_z,
+    divergence_ice = news_z - ice_z,
+    div_sentiment_news = sentiment_z - news_z,
+    div_sentiment_cbp = sentiment_z - cbp_z
+  )
+```
+
+# Results
+
+## Descriptive Overview
+
+Table 1 summarizes the main narrative and enforcement measures. The GDELT series contains `r nrow(gdelt)` monthly observations, with an average of about `r comma(round(mean(gdelt$n_articles, na.rm = TRUE),0))` immigration-related articles per month. The mean GDELT tone score is `r round(mean(gdelt$mean_tone, na.rm = TRUE), 2)`, indicating consistently negative coverage. Reddit contains `r comma(nrow(reddit))` posts across `r n_distinct(reddit$subreddit)` subreddits and `r n_distinct(reddit$keyword)` keywords. ICE monthly arrests average `r comma(round(mean(ice_monthly$arrests, na.rm = TRUE),0))`, while CBP monthly encounters average `r comma(round(mean(cbp_monthly$encounters, na.rm = TRUE),0))`.
+
+```{r}
+summary_tbl <- tibble(
+  Measure = c(
+    "GDELT monthly article count",
+    "GDELT average tone",
+    "Reddit post volume",
+    "ICE monthly arrests",
+    "CBP monthly encounters"
+  ),
+  Mean = c(
+    mean(gdelt$n_articles, na.rm = TRUE),
+    mean(gdelt$mean_tone, na.rm = TRUE),
+    mean(reddit_monthly$n_posts, na.rm = TRUE),
+    mean(ice_monthly$arrests, na.rm = TRUE),
+    mean(cbp_monthly$encounters, na.rm = TRUE)
+  ),
+  SD = c(
+    sd(gdelt$n_articles, na.rm = TRUE),
+    sd(gdelt$mean_tone, na.rm = TRUE),
+    sd(reddit_monthly$n_posts, na.rm = TRUE),
+    sd(ice_monthly$arrests, na.rm = TRUE),
+    sd(cbp_monthly$encounters, na.rm = TRUE)
+  ),
+  Min = c(
+    min(gdelt$n_articles, na.rm = TRUE),
+    min(gdelt$mean_tone, na.rm = TRUE),
+    min(reddit_monthly$n_posts, na.rm = TRUE),
+    min(ice_monthly$arrests, na.rm = TRUE),
+    min(cbp_monthly$encounters, na.rm = TRUE)
+  ),
+  Max = c(
+    max(gdelt$n_articles, na.rm = TRUE),
+    max(gdelt$mean_tone, na.rm = TRUE),
+    max(reddit_monthly$n_posts, na.rm = TRUE),
+    max(ice_monthly$arrests, na.rm = TRUE),
+    max(cbp_monthly$encounters, na.rm = TRUE)
+  )
+)
+
+kable(summary_tbl, digits = 2, caption = "Table 1. Summary statistics of narrative and enforcement indicators.")
+```
+
+### Key Descriptive Patterns
+
+Immigration news coverage is substantial but uneven. Coverage peaks at `r comma(max(gdelt$n_articles, na.rm = TRUE))` articles in `r format(gdelt$month[which.max(gdelt$n_articles)], "%b %Y")`, which suggests episodic spikes in media attention rather than smooth long-run change. Reddit discourse is concentrated in a small number of communities, and total Reddit activity peaks at `r comma(max(reddit_monthly$n_posts, na.rm = TRUE))` posts in `r format(reddit_monthly$month[which.max(reddit_monthly$n_posts)], "%b %Y")`.
+
+On the enforcement side, ICE arrests peak at `r comma(max(ice_monthly$arrests, na.rm = TRUE))` in `r format(ice_monthly$month[which.max(ice_monthly$arrests)], "%b %Y")`, while CBP encounters reach a much larger peak of `r comma(max(cbp_monthly$encounters, na.rm = TRUE))` in `r format(cbp_monthly$month[which.max(cbp_monthly$encounters)], "%b %Y")`. This confirms that CBP encounters and ICE arrests measure different scales and dimensions of enforcement activity.
+
+## Trends in Narrative and Enforcement Indicators
+
+Figure 1 displays the two narrative series from GDELT: article volume and average tone. The article count series fluctuates sharply over time, while the tone series is consistently negative and varies more gradually. This suggests that media attention and media tone capture different aspects of immigration discourse.
+
+```{r fig.height=4.5, fig.width=10}
+library(gridExtra)
+p1 <- ggplot(gdelt, aes(month, n_articles)) +
+  geom_line(color = "steelblue", linewidth = 1.1) +
+  labs(
+    title = "Monthly Immigration News Coverage (GDELT)",
+    x = "Month", y = "Number of Articles"
+  )
+
+p2 <- ggplot(gdelt, aes(month, mean_tone)) +
+  geom_line(color = "darkred", linewidth = 1.1) +
+  labs(
+    title = "Average Tone of Immigration News Coverage",
+    x = "Month", y = "Average Tone"
+  )
+
+grid.arrange(p1, p2, ncol=2)
+```
+
+Figure 2 compares the two enforcement benchmarks. CBP encounters exhibit large spikes and sharp declines, especially around 2023 and late 2024, while ICE arrests vary more smoothly and remain on a much smaller scale. This suggests that border activity is more volatile than interior enforcement.
+
+```{r fig.height=4.5, fig.width=10}
+p3 <- ggplot(ice_monthly, aes(month, arrests)) +
+  geom_line(color = "darkred", linewidth = 1.1) +
+  labs(
+    title = "Monthly ICE Administrative Arrests",
+    x = "Month", y = "Arrests"
+  )
+
+p4 <- ggplot(cbp_monthly, aes(month, encounters)) +
+  geom_line(color = "steelblue", linewidth = 1.1) +
+  labs(
+    title = "Monthly CBP Encounters",
+    x = "Month", y = "Encounter Count"
+  )
+
+grid.arrange(p3, p4, ncol=2)
+```
+
+## TSE Framework and Data Overlap
+
+Within a **Total Survey Error (TSE)** framework, the narrative series are treated as **measurement processes** that may introduce distortion through selective amplification, framing, or event-driven attention. ICE and CBP serve as benchmark measures of enforcement activity.
+
+The merged dataset does not contain a common overlap for all series simultaneously. GDELT contributes `r sum(!is.na(analysis_df$news_z))` months, CBP contributes `r sum(!is.na(analysis_df$cbp_z))`, ICE contributes `r sum(!is.na(analysis_df$ice_z))`, and Reddit sentiment contributes `r sum(!is.na(analysis_df$sentiment_z))`. Because the sentiment series begins in 2025 and ICE ends in 2024, sentiment cannot be directly compared with ICE over a shared period.
+
+```{r}
+availability_tbl <- tibble(
+  Measure = c("GDELT news coverage", "CBP encounters", "ICE arrests", "Reddit sentiment"),
+  Available_Months = c(
+    sum(!is.na(analysis_df$news_z)),
+    sum(!is.na(analysis_df$cbp_z)),
+    sum(!is.na(analysis_df$ice_z)),
+    sum(!is.na(analysis_df$sentiment_z))
+  )
+)
+
+kable(availability_tbl, caption = "Table 2. Available months by indicator.")
+```
+
+## Narrative and Enforcement Comparison
+
+Figure 3 shows the standardized trend comparison for GDELT news coverage, CBP encounters, and ICE arrests. Standardization places the measures on a common scale and makes it easier to compare direction and timing. The key pattern is that these series do **not** move together consistently. There are periods where news coverage rises sharply while enforcement measures remain relatively stable, and other periods where enforcement changes without corresponding media response.
+
+```{r}
+trend_df <- analysis_df %>%
+  select(month, news_z, cbp_z, ice_z) %>%
+  pivot_longer(-month, names_to = "indicator", values_to = "value") %>%
+  mutate(
+    indicator = recode(
+      indicator,
+      news_z = "News Coverage (GDELT)",
+      cbp_z = "CBP Encounters",
+      ice_z = "ICE Arrests"
+    )
+  )
+
+ggplot(trend_df, aes(month, value, color = indicator)) +
+  geom_line(linewidth = 1.2, na.rm = TRUE) +
+  labs(
+    title = "Standardized Trends: News Coverage vs Enforcement",
+    x = "Month", y = "Standardized Value", color = ""
+  )
+```
+
+This is the first major empirical indication that narrative indicators only partially reflect enforcement activity.
+
+## Correlation Results
+
+The pairwise correlation matrix confirms that the relationships are limited. News coverage has a **moderate positive correlation** with CBP encounters and a **negative correlation** with ICE arrests. Reddit sentiment is positively related to CBP encounters but weakly negative relative to news volume.
+
+```{r}
+cor_tbl <- analysis_df %>%
+  select(news_z, cbp_z, ice_z, sentiment_z) %>%
+  cor(use = "pairwise.complete.obs") %>%
+  round(3)
+
+kable(cor_tbl, caption = "Table 3. Pairwise correlations among standardized indicators.")
+```
+
+The correlation between GDELT news coverage and CBP encounters is `r round(cor(analysis_df$news_z, analysis_df$cbp_z, use = "pairwise.complete.obs"), 3)`, while the correlation between news coverage and ICE arrests is `r round(cor(analysis_df$news_z, analysis_df$ice_z, use = "pairwise.complete.obs"), 3)`. The positive news–CBP relationship suggests that media attention increases somewhat when border encounters rise, but the relationship is not strong. The negative news–ICE correlation suggests that interior enforcement and media narratives do not move together.
+
+## Divergence Between Narratives and Enforcement
+
+To make mismatch explicit, divergence measures were computed as the difference between standardized news coverage and standardized enforcement levels.
+
+```{r}
+ggplot(analysis_df, aes(month, divergence_cbp)) +
+  geom_line(color = "purple", linewidth = 1.2, na.rm = TRUE) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Divergence Between News Coverage and CBP Encounters",
+    x = "Month", y = "News - CBP (standardized)"
+  )
+```
+
+Positive values indicate periods when media coverage is higher than what would be expected given the enforcement benchmark; negative values indicate the opposite. The divergence plot shows several periods of positive mismatch, suggesting that immigration may be amplified in public narratives beyond what is visible in enforcement data.
+
+## Regression Analysis: News Coverage Predicting CBP Encounters
+
+A simple regression was estimated with standardized CBP encounters as the outcome and standardized news coverage as the predictor.
+
+```{r}
+reg_df <- analysis_df %>%
+  drop_na(news_z, cbp_z)
+
+model_cbp <- lm(cbp_z ~ news_z, data = reg_df)
+
+model_cbp %>%
+  tidy() %>%
+  mutate(term = str_replace_all(term, "[\\(\\)]", "")) %>% # Removes ( and )
+  kable(digits = 3, 
+        format = "latex", 
+        booktabs = TRUE, 
+        escape = TRUE, 
+        caption = "Table 4. Regression Results.") %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+
+```{r}
+model_glance <- glance(model_cbp)
+library(kableExtra)
+
+kable(model_glance)
+```
+
+The regression coefficient on news coverage is positive, but the model explains only `r round(model_glance$r.squared, 3)` of the variation in CBP encounters. The p-value on the news coefficient is `r round(tidy(model_cbp)$p.value[2], 3)`. In substantive terms, news coverage is associated with CBP activity, but the relationship is fairly weak. Narrative indicators therefore capture only a limited portion of the variation in enforcement conditions.
+
+```{r}
+ggplot(reg_df, aes(news_z, cbp_z)) +
+  geom_point(size = 2.4, alpha = 0.7, color = "#2C7BB6") +
+  geom_smooth(method = "lm", color = "#D7191C", linewidth = 1.1, se = TRUE) +
+  labs(
+    title = "Relationship Between News Coverage and CBP Encounters",
+    x = "News Coverage (standardized)",
+    y = "CBP Encounters (standardized)"
+  )
+```
+
+## Residual-Based Mismatch
+
+To quantify the portion of enforcement variation that is **not** captured by narrative indicators, residuals from the CBP regression were examined.
+
+```{r}
+reg_df <- reg_df %>%
+  mutate(cbp_resid = resid(model_cbp))
+
+ggplot(reg_df, aes(month, cbp_resid)) +
+  geom_line(color = "black", linewidth = 1.2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Residual Mismatch: News Predicting CBP Encounters",
+    x = "Month", y = "Residual"
+  )
+```
+
+Large residuals indicate months where the narrative measure fails to track the benchmark. These residual mismatches are one of the clearest TSE-style signals in the analysis: they show that narrative data do not just imperfectly reflect enforcement, but can systematically diverge from it.
+
+## Sentiment Extension: Reddit Tone and Narrative Measurement
+
+The second stage of the analysis moves from **narrative volume** to **narrative tone** using LLM-based sentiment classification of Reddit posts. Figure 6 compares standardized Reddit sentiment, GDELT news coverage, and CBP encounters over the overlapping period.
+
+```{r}
+sent_plot_df <- analysis_df %>%
+  select(month, sentiment_z, news_z, cbp_z) %>%
+  pivot_longer(-month, names_to = "indicator", values_to = "value") %>%
+  mutate(
+    indicator = recode(
+      indicator,
+      sentiment_z = "Reddit Sentiment",
+      news_z = "News Coverage",
+      cbp_z = "CBP Encounters"
+    )
+  )
+
+ggplot(sent_plot_df, aes(month, value, color = indicator)) +
+  geom_line(linewidth = 1.2, na.rm = TRUE) +
+  labs(
+    title = "Reddit Sentiment, News Coverage, and CBP Encounters",
+    x = "Month", y = "Standardized Value", color = ""
+  )
+```
+
+Reddit sentiment is smoother than the enforcement series and does not show the same sharp spikes as CBP encounters. This suggests that online tone evolves more gradually than policy or enforcement activity. In other words, public narrative tone appears to track interpretation and reaction more than immediate enforcement conditions.
+
+## Sentiment-Based Divergence
+
+A second divergence measure compares Reddit sentiment to CBP encounters over the overlapping period.
+
+```{r}
+ggplot(analysis_df, aes(month, div_sentiment_cbp)) +
+  geom_line(color = "darkgreen", linewidth = 1.2, na.rm = TRUE) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "TSE Divergence: Reddit Sentiment vs CBP Encounters",
+    x = "Month", y = "Sentiment - CBP (standardized)"
+  )
+```
+
+This plot shows that sentiment frequently moves independently of enforcement. There are months where CBP encounters change substantially but sentiment remains relatively stable, and other months where the tone of Reddit discussion shifts without a corresponding change in enforcement. This reinforces the idea that narrative indicators capture perception and framing rather than enforcement reality alone.
+
+## Regression Analysis: Sentiment Predicting CBP Encounters
+
+To quantify the association between sentiment and enforcement, a second regression was estimated with standardized CBP encounters as the outcome and standardized Reddit sentiment as the predictor.
+
+```{r}
+sent_reg_df <- analysis_df %>%
+  drop_na(sentiment_z, cbp_z)
+
+model_sent_cbp <- lm(cbp_z ~ sentiment_z, data = sent_reg_df)
+
+tidy(model_sent_cbp) %>%
+  kable(digits = 3, caption = "Table 5. Regression of standardized CBP encounters on standardized Reddit sentiment.")
+```
+
+```{r}
+model_sent_glance <- glance(model_sent_cbp)
+tidy(model_sent_cbp) %>%
+  mutate(term = str_replace(term, "\\(Intercept\\)", "Intercept")) %>% 
+  kable(digits = 3, caption = "Table 5. Regression Results.")
+```
+
+The sentiment coefficient is positive, and the model explains `r round(model_sent_glance$r.squared, 3)` of the variation in CBP encounters. The p-value on the sentiment term is `r round(tidy(model_sent_cbp)$p.value[2], 3)`. Although the explanatory power is slightly larger than the news-volume model, the relationship remains statistically weak. This indicates that sentiment captures some movement in the enforcement environment, but not enough to serve as a stand-alone proxy.
+
+```{r}
+ggplot(sent_reg_df, aes(sentiment_z, cbp_z)) +
+  geom_point(size = 2.4, alpha = 0.7, color = "#1B9E77") +
+  geom_smooth(method = "lm", color = "#D95F02", linewidth = 1.1, se = TRUE) +
+  labs(
+    title = "Relationship Between Reddit Sentiment and CBP Encounters",
+    x = "Reddit Sentiment (standardized)",
+    y = "CBP Encounters (standardized)"
+  )
+```
+
+## Exploratory Lag Structure
+
+As a further check, an exploratory Granger-causality test was run on the overlapping CBP and sentiment series. This does **not** establish causal effects, but it does ask whether past sentiment contains useful information for predicting current CBP encounters beyond the past behavior of CBP itself.
+
+```{r}
+granger_df <- analysis_df %>%
+  select(month, cbp_z, sentiment_z) %>%
+  drop_na() %>%
+  arrange(month)
+
+grangertest(cbp_z ~ sentiment_z, order = 1, data = granger_df) %>%
+  tidy() %>%
+  # Ensure no weird characters start the row
+  mutate(term = as.character(row_number())) %>% 
+  kable(digits = 3, caption = "Table 6. Exploratory Granger-causality test.") 
+```
+
+## Overall Interpretation
+
+Across the full set of analyses, the results point in the same direction: **narrative indicators do not consistently track enforcement activity**. News coverage fluctuates more sharply than benchmark enforcement measures, sentiment evolves more smoothly than enforcement activity, and both regression models explain only a modest share of the variation in CBP encounters.
+
+From a TSE perspective, this means that immigration narratives in media and social platforms behave as **measurement systems with their own sources of distortion**. They reflect selective attention, framing, and interpretation—not simply underlying enforcement activity. The central implication is that narrative indicators should not be treated as neutral proxies for immigration conditions without validation against benchmark administrative data.
+
+```         
+```

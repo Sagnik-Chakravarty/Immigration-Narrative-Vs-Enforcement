@@ -1,0 +1,205 @@
+---
+title: "Final Paper"
+format: html
+editor: visual
+---
+
+```{r}
+
+library(tidyverse)
+library(lubridate)
+library(broom)
+library(glue)
+
+# create output folders
+dir.create("figures", showWarnings = FALSE)
+dir.create("tables", showWarnings = FALSE)
+
+theme_set(
+  theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      legend.position = "bottom"
+    )
+)
+
+# -----------------------------
+# LOAD DATA
+# -----------------------------
+gdelt <- read_csv("gdelt_gkg_immigration_monthly.csv", show_col_types = FALSE)
+reddit <- read_csv("reddit_llm_monthly.csv", show_col_types = FALSE)
+ice <- read_csv("ice_monthly.csv", show_col_types = FALSE)
+cbp <- read_csv("cbp_monthly.csv", show_col_types = FALSE)
+
+gdelt <- gdelt %>% mutate(month = as.Date(month))
+reddit <- reddit %>% mutate(month = as.Date(month))
+ice <- ice %>% mutate(month = as.Date(month))
+cbp <- cbp %>% mutate(month = as.Date(month))
+
+df <- gdelt %>%
+  full_join(reddit, by = "month") %>%
+  full_join(ice, by = "month") %>%
+  full_join(cbp, by = "month") %>%
+  arrange(month) %>%
+  mutate(
+    news_z = scale(n_articles)[,1],
+    cbp_z = scale(encounters)[,1],
+    ice_z = scale(arrests)[,1],
+    sentiment_z = scale(avg_sentiment)[,1],
+    divergence_cbp = news_z - cbp_z
+  )
+
+# -----------------------------
+# TABLES
+# -----------------------------
+summary_tbl <- tibble(
+  Measure = c("News","Tone","Reddit","ICE","CBP"),
+  Mean = c(
+    mean(gdelt$n_articles, na.rm=TRUE),
+    mean(gdelt$mean_tone, na.rm=TRUE),
+    mean(reddit$n_posts, na.rm=TRUE),
+    mean(ice$arrests, na.rm=TRUE),
+    mean(cbp$encounters, na.rm=TRUE)
+  )
+)
+
+overlap_tbl <- tibble(
+  Measure = c("News","CBP","ICE","Sentiment"),
+  Months = c(
+    sum(!is.na(df$n_articles)),
+    sum(!is.na(df$encounters)),
+    sum(!is.na(df$arrests)),
+    sum(!is.na(df$avg_sentiment))
+  )
+)
+
+write_csv(summary_tbl, "tables/summary.csv")
+write_csv(overlap_tbl, "tables/overlap.csv")
+
+# -----------------------------
+# MODEL
+# -----------------------------
+reg_df <- df %>%
+  filter(!is.na(news_z), !is.na(cbp_z))
+
+model <- lm(cbp_z ~ news_z, data = reg_df)
+reg_df$resid <- residuals(model)
+
+# -----------------------------
+# FIGURE 1: STANDARDIZED
+# -----------------------------
+p1 <- df %>%
+  select(month, news_z, cbp_z, ice_z) %>%
+  pivot_longer(-month) %>%
+  ggplot(aes(month, value, color=name)) +
+  geom_hline(yintercept=0, linetype="dashed") +
+  geom_line(size=1) +
+  labs(
+    title="Standardized Trends: Narratives vs Enforcement",
+    subtitle="Series do not move together consistently",
+    x="", y="Standardized value", color=""
+  )
+
+ggsave("figures/figure1_standardized.png", p1, width=10, height=5)
+print(p1)
+
+# -----------------------------
+# FIGURE 2: DIVERGENCE
+# -----------------------------
+p2 <- ggplot(df, aes(month, divergence_cbp)) +
+  geom_hline(yintercept=0, linetype="dashed") +
+  geom_line(color="purple", size=1) +
+  geom_ribbon(
+    aes(ymin=0, ymax=pmax(divergence_cbp,0)),
+    fill="purple", alpha=0.2
+  ) +
+  labs(
+    title="Divergence Between Narrative Salience and Enforcement",
+    subtitle="Positive values indicate narrative exceeds benchmark",
+    x="", y="News - CBP"
+  )
+
+ggsave("figures/figure2_divergence.png", p2, width=10, height=5)
+print(p2)
+
+# -----------------------------
+# FIGURE 3: REGRESSION
+# -----------------------------
+r2 <- round(summary(model)$r.squared,3)
+
+
+p3 <- ggplot(reg_df, aes(news_z, cbp_z)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm") +
+  annotate("text", x = -1, y = 1.5,
+           label = paste0("R² = ", r2, "\nWeak relationship")) +
+  labs(
+    title = "News vs CBP Encounters",
+    subtitle = "Narrative indicators explain limited variation",
+    x = "News (z)", y = "CBP (z)"
+  )
+
+ggsave("figures/figure3_regression.png", p3, width = 8, height = 5)
+print(p3)
+
+
+
+# -----------------------------
+# APPENDIX FIGURES
+# -----------------------------
+
+# Enforcement
+p4 <- bind_rows(
+  ice %>% mutate(series="ICE", value=arrests),
+  cbp %>% mutate(series="CBP", value=encounters)
+) %>%
+  ggplot(aes(month, value)) +
+  geom_line() +
+  facet_wrap(~series, scales="free_y")
+
+ggsave("figures/appendix_enforcement.png", p4, width=8, height=6)
+
+# Residuals
+p5 <- ggplot(reg_df, aes(month, resid)) +
+  geom_line() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residual mismatch")
+
+ggsave("figures/appendix_residuals.png", p5, width = 10, height = 4)
+print(p5)
+
+# Sentiment compare
+p6 <- df %>%
+  select(month, sentiment_z, cbp_z, news_z) %>%
+  pivot_longer(-month) %>%
+  ggplot(aes(month, value, color=name)) +
+  geom_line()
+
+ggsave("figures/appendix_sentiment_compare.png", p6, width=10, height=5)
+
+# Sentiment regression
+p7 <- ggplot(df, aes(sentiment_z, cbp_z)) +
+  geom_point() +
+  geom_smooth(method="lm")
+
+ggsave("figures/appendix_sentiment_reg.png", p7, width=8, height=5)
+
+```
+
+```{r}
+cor(df$news_z, df$cbp_z, use = "complete.obs")
+cor(df$sentiment_z, df$cbp_z, use = "complete.obs")
+```
+
+```{r}
+library(broom)
+
+print(augment(model) %>%
+  arrange(desc(.cooksd)) %>%
+  head())
+```
+
+```{r}
+cor(df$news_z, dplyr::lag(df$cbp_z), use="complete.obs")
+cor(dplyr::lag(df$news_z), df$cbp_z, use="complete.obs")
+```
