@@ -4,9 +4,6 @@ This repository contains an empirical analysis of whether immigration-related pu
 
 The central idea is that narrative data should be treated as a measurement process rather than a direct representation of immigration conditions. News coverage and online discussion can reflect selective attention, framing, platform amplification, and timing differences. This project evaluates how strongly those narrative indicators align with benchmark enforcement measures.
 
-## Repository Description
-
-R/Quarto analysis comparing immigration narratives with CBP and ICE enforcement indicators using GDELT news, Reddit sentiment, z-score standardization, divergence measures, regression, and residual diagnostics.
 
 ## Research Question
 
