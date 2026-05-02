@@ -1,1 +1,74 @@
-# Immigration
+# Immigration Narratives vs. Enforcement Statistics
+
+This repository contains an empirical analysis of whether immigration-related public narratives track administrative enforcement activity in the United States. The project compares monthly news coverage, Reddit discourse, LLM-classified sentiment, CBP encounters, and ICE administrative arrests using a Total Survey Error (TSE) framework.
+
+The central idea is that narrative data should be treated as a measurement process rather than a direct representation of immigration conditions. News coverage and online discussion can reflect selective attention, framing, platform amplification, and timing differences. This project evaluates how strongly those narrative indicators align with benchmark enforcement measures.
+
+## Research Question
+
+Do media and social media narratives about immigration move with actual enforcement indicators, or do they diverge in ways that reflect selective attention, framing, timing differences, and measurement error?
+
+## Data Sources
+
+The analysis combines monthly indicators from:
+
+- **GDELT**: immigration-related news article volume and average tone
+- **Reddit**: immigration-related post volume and LLM-classified sentiment/stance measures
+- **CBP**: nationwide encounter counts
+- **ICE**: administrative arrest counts
+
+All series are aggregated to the monthly level so narrative and enforcement indicators can be compared on a common time scale.
+
+## Methods
+
+The analysis uses R/Quarto and includes:
+
+- Data cleaning and monthly aggregation
+- Joins across narrative, social media, and administrative datasets
+- Standardization of indicators using z-scores
+- Divergence measures comparing narrative salience with CBP enforcement benchmarks
+- Contemporaneous correlation analysis
+- One-period lagged correlation checks
+- Linear regression of standardized CBP encounters on standardized news coverage
+- Residual-based mismatch analysis
+- Influence diagnostics using Cook's distance
+- Tables and visualizations for interpretation
+
+## Key Findings
+
+- News coverage has a modest positive contemporaneous association with CBP encounters.
+- Reddit sentiment has a somewhat stronger association with CBP encounters, but over a shorter overlap period.
+- A simple lagged correlation analysis suggests that timing may matter: narrative and enforcement series may move with delay rather than in lockstep.
+- A regression of standardized CBP encounters on standardized news coverage explains only a small share of variation.
+- Influence diagnostics suggest that the weak positive relationship is not driven by one extreme observation.
+- Overall, narrative indicators are informative but incomplete measures of enforcement-related conditions.
+
+## Repository Contents
+
+- `Final.qmd`: Full Quarto report containing data construction, analysis, figures, tables, and interpretation.
+- `FinalPaper.qmd`: Streamlined R/Quarto analysis script that produces key figures and tables.
+- `reddit_llm_monthly.csv`: Monthly Reddit sentiment/stance series used in the analysis.
+- Additional source data files: monthly GDELT, Reddit, ICE, and CBP inputs used for the report.
+
+## Tools
+
+- R
+- Quarto
+- tidyverse
+- lubridate
+- readxl
+- broom
+- lmtest
+- ggplot2
+- kableExtra
+
+## Reproducibility Notes
+
+To reproduce the analysis, clone the repository, open the Quarto files in RStudio or another Quarto-compatible environment, install the required R packages, and render the report. The workflow assumes the relevant source CSV/XLSX files are located in the repository root with the filenames referenced in the Quarto scripts.
+
+## Author
+
+**Sagnik Chakravarty**  
+M.S. Survey and Data Science, University of Maryland, College Park  
+Portfolio: https://sagnik-chakravarty.github.io/  
+GitHub: https://github.com/Sagnik-Chakravarty
